@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>JJD 감귤창 🍊</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+<style>
+  body {
+    font-family: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+    background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
+  }
+</style>
+</head>
+<body class="min-h-screen text-gray-800 pb-20">
+
+<div id="app"></div>
+
+<script>
+const DB_KEY = 'JJD_GAMGYUL_V6_PRETENDARD';
+const DEFAULT_DB = {
+  users: [
+    { id: 'u1', code: '575cmny', nickname: '대표관리자 🍊', role: 'super_admin', coins: 1000, suspended: false, bgColor: '#FFF7ED', bio: 'JJD 감귤창 대표 관리자입니다!' }
+  ],
+  eggs: [],
+  eggPets: [],
+  shopPets: [],
+  userPets: [],
+  badges: [],
+  userBadges: [],
+  events: [],
+  eventPets: [],
+  eventEggs: [],
+  notices: [{ id: 'n1', title: '환영합니다!', content: 'JJD 감귤창에 오신 가족 여러분 환영합니다 🍊' }],
+  posts: [],
+  pointLogs: [],
+  gameLogs: []
+};
+
+let db = JSON.parse(localStorage.getItem(DB_KEY)) || DEFAULT_DB;
+if (!db.eventEggs) db.eventEggs = [];
+
+function saveDB() {
+  localStorage.setItem(DB_KEY, JSON.stringify(db));
+}
+
+let currentUserId = null;
+let loginTab = 'member';
+let needNickname = false;
+let pendingUser = null;
+let currentTab = 'shop';
+let modalData = null;
+
+// 임시 에그 펫 슬롯 상태
+let tempEggPets = [
+  { name: '', image: '', grade: '일반', prob: 50 }
+];
+
+// 임시 이벤트 아이템 슬롯 상태
+let tempEventItems = [
+  { kind: 'pet', name: '', image: '', price: 100, grade: '스페셜', eggId: '' }
+];
+
+function getMe() {
+  return db.users.find(u => u.id === currentUserId);
+}
+
+function addCoins(userId, amount, reason) {
+  const u = db.users.find(x => x.id === userId);
+  if (!u || u.coins + amount < 0) return false;
+  u.coins += amount;
+  db.pointLogs.unshift({ user: u.nickname || u.code, amount, reason, time: new Date().toLocaleTimeString() });
+  saveDB();
+  return true;
+}
+
+function handleCustomCoin(userId, isAdd) {
+  const val = Number(document.getElementById('customCoinInput')?.value);
+  if (!val || val <= 0) return alert('1 이상의 숫자를 입력해주세요!');
+  const ok = addCoins(userId, isAdd ? val : -val, isAdd ? `관리자 지급 (+${val})` : `관리자 차감 (-${val})`);
+  if (!ok) return alert('보유 코인보다 많이 차감할 수 없습니다!');
+  render();
+}
+
+function handleLogin(e) {
+  e.preventDefault();
+  const codeInput = document.getElementById('loginCode')?.value.trim().toLowerCase();
+  const nickInput = document.getElementById('nickInput')?.value.trim();
+
+  if (needNickname && pendingUser) {
+    if (!nickInput) return alert('닉네임을 입력해주세요!');
+    pendingUser.nickname = nickInput;
+    saveDB();
+    currentUserId = pendingUser.id;
+    currentTab = 'shop';
+    needNickname = false;
+    pendingUser = null;
+    render();
+    return;
+  }
+
+  const user = db.users.find(u => u.code.toLowerCase() === codeInput);
+  if (!user) return alert('존재하지 않는 초대 코드입니다!');
+  if (user.suspended) return alert('이용이 정지된 계정입니다.');
+  if (loginTab === 'member' && user.role !== 'member') return alert('관리자 코드는 [👑 관리자] 탭에서만 로그인할 수 있습니다!');
+  if (loginTab === 'admin' && user.role === 'member') return alert('일반 회원 코드는 [🌱 가족 회원] 탭에서만 로그인할 수 있습니다!');
+
+  if (!user.nickname) {
+    needNickname = true;
+    pendingUser = user;
+    render();
+    return;
+  }
+  currentUserId = user.id;
+  currentTab = 'shop';
+  render();
+}
+
+// 초대 코드 생성
+function createInviteCode(role) {
+  const code = Math.random().toString(36).substring(2, 9);
+  db.users.push({
+    id: 'u' + Date.now(),
+    code,
+    nickname: '',
+    role,
+    coins: 100,
+    suspended: false,
+    bgColor: '#FFF7ED',
+    bio: '안녕하세요!'
+  });
+  saveDB();
+  alert(`새 초대 코드가 발급되었습니다: ${code}`);
+  render();
+}
+
+// 에그 슬롯 관리
+function syncEggSlotsFromDOM() {
+  tempEggPets = tempEggPets.map((slot, idx) => ({
+    name: document.getElementById(`epName_${idx}`)?.value || '',
+    image: document.getElementById(`epImg_${idx}`)?.value || '',
+    grade: document.getElementById(`epGrade_${idx}`)?.value || '일반',
+    prob: Number(document.getElementById(`epProb_${idx}`)?.value || 0)
+  }));
+}
+
+function addEggSlot() {
+  syncEggSlotsFromDOM();
+  tempEggPets.push({ name: '', image: '', grade: '일반', prob: 10 });
+  render();
+}
+
+function removeEggSlot(idx) {
+  syncEggSlotsFromDOM();
+  if (tempEggPets.length <= 1) return alert('최소 1개의 펫 슬롯이 필요합니다.');
+  tempEggPets.splice(idx, 1);
+  render();
+}
+
+function saveEggWithPets() {
+  syncEggSlotsFromDOM();
+  const eggName = document.getElementById('eggName')?.value.trim();
+  const eggImg = document.getElementById('eggImg')?.value.trim() || 'https://placehold.co/150x150/fed7aa/ea580c?text=EGG';
+  const eggPrice = Number(document.getElementById('eggPrice')?.value);
+  const isEventOnly = document.getElementById('eggEventOnly')?.checked || false;
+
+  if (!eggName || !eggPrice || eggPrice <= 0) return alert('에그 이름과 가격을 올바르게 입력해주세요!');
+  const validPets = tempEggPets.filter(p => p.name.trim());
+  if (!validPets.length) return alert('최소 1개 이상의 펫 이름을 입력해주세요!');
+
+  const eggId = 'egg' + Date.now();
+  db.eggs.push({ id: eggId, name: eggName, image: eggImg, price: eggPrice, isEventOnly });
+  validPets.forEach((p, i) => {
+    db.eggPets.push({
+      id: 'ep' + Date.now() + '_' + i,
+      eggId,
+      name: p.name.trim(),
+      image: p.image.trim() || 'https://placehold.co/150x150/ffedd5/c2410c?text=PET',
+      grade: p.grade,
+      prob: p.prob > 0 ? p.prob : 10
+    });
+  });
+
+  tempEggPets = [{ name: '', image: '', grade: '일반', prob: 50 }];
+  saveDB();
+  alert(`'${eggName}' 에그와 ${validPets.length}종의 펫이 등록되었습니다!`);
+  render();
+}
+
+// 에그 부화 실행
+function hatchEgg(eggId) {
+  const egg = db.eggs.find(e => e.id === eggId);
+  const pList = db.eggPets.filter(p => p.eggId === eggId);
+  if (!egg) return;
+  if (!pList.length) return alert('에그에 등록된 펫이 없어요!');
+  if (!addCoins(currentUserId, -egg.price, `${egg.name} 부화`)) return alert('감귤이 부족해요!');
+
+  const total = pList.reduce((s, x) => s + Number(x.prob), 0);
+  let rnd = Math.random() * total;
+  let picked = pList[0];
+  for (const p of pList) {
+    if (rnd < Number(p.prob)) {
+      picked = p;
+      break;
+    }
+    rnd -= Number(p.prob);
+  }
+  db.userPets.push({
+    id: 'up' + Date.now(),
+    userId: currentUserId,
+    name: picked.name,
+    image: picked.image,
+    grade: picked.grade
+  });
+  db.gameLogs.unshift({ user: getMe().nickname, game: '에그 부화', result: picked.name });
+  saveDB();
+  if (typeof confetti === 'function') confetti();
+  modalData = {
+    title: `🎉 [${picked.grade}] ${picked.name} 탄생!`,
+    image: picked.image,
+    sub: '개인 도감에 자동 등록되었습니다!'
+  };
+  render();
+}
+
+// 상점 직구 펫 등록
+function addShopPet() {
+  const name = document.getElementById('spName')?.value.trim();
+  const image = document.getElementById('spImg')?.value.trim() || 'https://placehold.co/150x150/fce7f3/db2777?text=PET';
+  const grade = document.getElementById('spGrade')?.value || '일반';
+  const price = Number(document.getElementById('spPrice')?.value);
+  if (!name || !price || price <= 0) return alert('펫 이름과 가격을 입력해주세요!');
+  db.shopPets.push({ id: 'sp' + Date.now(), name, image, grade, price });
+  saveDB();
+  alert('상점 직구 펫이 등록되었습니다!');
+  render();
+}
+
+// 뱃지 생성 (조건 포함)
+function addBadge() {
+  const name = document.getElementById('badgeName')?.value.trim();
+  const image = document.getElementById('badgeImg')?.value.trim() || 'https://placehold.co/150x150/dcfce7/15803d?text=BADGE';
+  const condition = document.getElementById('badgeCond')?.value.trim();
+  if (!name) return alert('뱃지 이름을 입력해주세요!');
+  db.badges.push({
+    id: 'b' + Date.now(),
+    name,
+    image,
+    condition: condition || '별도 조건 없음 (관리자 재량 지급)'
+  });
+  saveDB();
+  alert('새 뱃지가 등록되었습니다!');
+  render();
+}
+
+// 뱃지 지급 / 미지급 토글
+function toggleUserBadge(userId, badgeId) {
+  const idx = db.userBadges.findIndex(ub => ub.userId === userId && ub.badgeId === badgeId);
+  if (idx >= 0) {
+    db.userBadges.splice(idx, 1);
+  } else {
+    db.userBadges.push({ id: 'ub' + Date.now(), userId, badgeId });
+  }
+  saveDB();
+  render();
+}
+
+// 이벤트 슬롯 동기화 및 생성
+function syncEventSlotsFromDOM() {
+  tempEventItems = tempEventItems.map((item, idx) => ({
+    kind: document.getElementById(`evItemKind_${idx}`)?.value || 'pet',
+    name: document.getElementById(`evItemName_${idx}`)?.value || '',
+    image: document.getElementById(`evItemImg_${idx}`)?.value || '',
+    price: Number(document.getElementById(`evItemPrice_${idx}`)?.value || 0),
+    grade: document.getElementById(`evItemGrade_${idx}`)?.value || '스페셜',
+    eggId: document.getElementById(`evItemEggId_${idx}`)?.value || ''
+  }));
+}
+
+function addEventItemSlot() {
+  syncEventSlotsFromDOM();
+  tempEventItems.push({ kind: 'pet', name: '', image: '', price: 100, grade: '스페셜', eggId: '' });
+  render();
+}
+
+function removeEventItemSlot(idx) {
+  syncEventSlotsFromDOM();
+  if (tempEventItems.length <= 1) return alert('최소 1개 슬롯이 필요합니다.');
+  tempEventItems.splice(idx, 1);
+  render();
+}
+
+function createEvent() {
+  syncEventSlotsFromDOM();
+  const title = document.getElementById('evTitle')?.value.trim();
+  const period = document.getElementById('evPeriod')?.value.trim();
+  const banner = document.getElementById('evBanner')?.value.trim();
+  const bgColor = document.getElementById('evBgColor')?.value || '#fff1f2';
+  const bgImage = document.getElementById('evBgImage')?.value.trim();
+
+  if (!title) return alert('이벤트 명을 입력해주세요!');
+  const eventId = 'ev' + Date.now();
+  db.events.unshift({
+    id: eventId,
+    title,
+    period: period || '상시 진행',
+    banner: banner || '',
+    bgColor,
+    bgImage
+  });
+
+  tempEventItems.forEach((item, idx) => {
+    if (item.kind === 'pet' && item.name.trim()) {
+      db.eventPets.push({
+        id: 'evp' + Date.now() + '_' + idx,
+        eventId,
+        name: item.name.trim(),
+        image: item.image.trim() || 'https://placehold.co/150x150/fce7f3/be185d?text=EVENT+PET',
+        price: item.price > 0 ? item.price : 100,
+        grade: item.grade || '스페셜'
+      });
+    } else if (item.kind === 'egg' && item.eggId) {
+      db.eventEggs.push({
+        id: 'eve' + Date.now() + '_' + idx,
+        eventId,
+        eggId: item.eggId
+      });
+    }
+  });
+
+  tempEventItems = [{ kind: 'pet', name: '', image: '', price: 100, grade: '스페셜', eggId: '' }];
+  saveDB();
+  alert('새 이벤트가 이벤트관에 등록되었습니다!');
+  render();
+}
+
+function addNotice() {
+  const title = document.getElementById('noticeTitle')?.value.trim();
+  const content = document.getElementById('noticeContent')?.value.trim();
+  if (!title || !content) return alert('공지 제목과 내용을 입력해주세요!');
+  db.notices.unshift({ id: 'n' + Date.now(), title, content });
+  saveDB();
+  alert('공지가 등록되었습니다!');
+  render();
+}
+
+function updateProfile() {
+  const me = getMe();
+  const newNick = document.getElementById('profNick')?.value.trim();
+  const newBio = document.getElementById('profBio')?.value.trim();
+  const newBg = document.getElementById('profBg')?.value;
+  if (!newNick) return alert('닉네임을 입력해주세요!');
+  me.nickname = newNick;
+  me.bio = newBio;
+  me.bgColor = newBg;
+  saveDB();
+  alert('프로필이 저장되었습니다!');
+  render();
+}
+
+function render() {
+  const app = document.getElementById('app');
+  if (!currentUserId) {
+    app.innerHTML = `
+      <div class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white/95 w-full max-w-md rounded-3xl shadow-2xl border-4 border-orange-300 p-8 text-center">
+          <div class="text-6xl mb-3 animate-bounce">🍊</div>
+          <h1 class="text-3xl font-extrabold text-orange-600 mb-1">JJD 감귤창</h1>
+          <p class="text-sm text-gray-500 mb-6">우리 가족만의 비밀 펫 & 수집 놀이터</p>
+
+          ${!needNickname ? `
+            <div class="grid grid-cols-2 gap-2 bg-orange-100 p-1.5 rounded-2xl mb-6 font-semibold">
+              <button type="button" onclick="loginTab='member'; render();" class="py-2.5 rounded-xl text-sm transition ${loginTab==='member' ? 'bg-orange-500 text-white shadow' : 'text-orange-800'}">🌱 가족 회원</button>
+              <button type="button" onclick="loginTab='admin'; render();" class="py-2.5 rounded-xl text-sm transition ${loginTab==='admin' ? 'bg-amber-600 text-white shadow' : 'text-amber-900'}">👑 관리자</button>
+            </div>
+          ` : ''}
+
+          <form onsubmit="handleLogin(event)" class="space-y-4 text-left">
+            ${!needNickname ? `
+              <div>
+                <label class="text-xs font-semibold text-gray-600 ml-1">${loginTab==='admin' ? '관리자 고유 코드 입력' : '가족 초대 코드 입력'}</label>
+                <input id="loginCode" type="text" placeholder="코드를 입력하세요 (대소문자 무관)" class="w-full mt-1 px-4 py-3 border-2 border-orange-200 rounded-2xl focus:outline-none focus:border-orange-500" required />
+              </div>
+            ` : `
+              <div class="bg-yellow-50 p-4 rounded-2xl border-2 border-yellow-300">
+                <p class="text-sm font-semibold text-amber-800 mb-2">🎉 첫 방문을 환영합니다! 사용할 닉네임을 정해주세요.</p>
+                <input id="nickInput" type="text" placeholder="예: 감귤왕자, 둘째공주" class="w-full px-4 py-2.5 border-2 border-amber-300 rounded-xl" required />
+              </div>
+            `}
+            <button type="submit" class="w-full py-3.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white font-bold text-base rounded-2xl shadow-lg hover:opacity-95">
+              ${needNickname ? '닉네임 저장하고 입장하기 🍊' : '감귤창 입장하기 🚀'}
+            </button>
+          </form>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const me = getMe();
+  const isAdmin = me.role === 'super_admin' || me.role === 'sub_admin';
+  const isSuper = me.role === 'super_admin';
+  const myPets = db.userPets.filter(p => p.userId === me.id);
+  const myBadgeIds = db.userBadges.filter(b => b.userId === me.id).map(b => b.badgeId);
+  const publicEggs = db.eggs.filter(e => !e.isEventOnly);
+
+  app.innerHTML = `
+    <header class="sticky top-0 z-30 bg-white/95 backdrop-blur border-b-2 border-orange-200 px-4 py-3 shadow-sm">
+      <div class="max-w-5xl mx-auto flex flex-wrap justify-between items-center gap-2">
+        <div class="flex items-center gap-2">
+          <span class="text-2xl">🍊</span>
+          <span class="text-xl font-extrabold text-orange-600">JJD 감귤창</span>
+          <span class="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-orange-100 text-orange-700">
+            ${me.role==='super_admin' ? '👑 대표관리자' : me.role==='sub_admin' ? '🛠️ 부관리자' : '🌱 가족회원'}
+          </span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="bg-amber-100 border border-amber-300 px-3 py-1 rounded-full text-amber-900 font-bold text-sm">🍊 ${me.coins.toLocaleString()} 감귤</span>
+          <span class="text-sm font-semibold text-gray-700">${me.nickname}님</span>
+          <button onclick="currentUserId=null; render();" class="text-xs font-medium px-2.5 py-1 bg-gray-100 hover:bg-red-100 text-gray-600 rounded-lg">로그아웃</button>
+        </div>
+      </div>
+      <nav class="max-w-5xl mx-auto flex gap-1.5 overflow-x-auto pt-3">
+        ${[
+          ['shop', '🛒 상점 (펫·에그)'],
+          ['events', '🎪 이벤트관'],
+          ['dex', '📖 개인 도감'],
+          ['rank', '🏆 랭킹'],
+          ['board', '💬 게시판·공지'],
+          ['profile', '🎨 내 프로필'],
+          ...(isAdmin ? [['admin', '⚙️ 관리자 콘솔']] : [])
+        ].map(([id, label]) => `
+          <button onclick="currentTab='${id}'; render();" class="px-3.5 py-2 rounded-2xl text-sm font-semibold whitespace-nowrap transition ${currentTab===id ? 'bg-orange-500 text-white shadow' : 'bg-orange-100/70 text-orange-800 hover:bg-orange-200/70'}">${label}</button>
+        `).join('')}
+      </nav>
+    </header>
+
+    <main class="max-w-5xl mx-auto p-4 space-y-6">
+      ${db.notices.length ? `<div class="bg-amber-100 border-2 border-amber-300 rounded-2xl p-3.5 text-sm text-amber-900">📢 <strong class="font-bold">[공지] ${db.notices[0].title}:</strong> ${db.notices[0].content}</div>` : ''}
+
+      ${currentTab === 'shop' ? `
+        <div class="space-y-8">
+          <section class="space-y-4">
+            <h2 class="text-xl font-bold text-orange-700">🥚 펫 에그 상점 (부화 전엔 이름과 확률만 공개!)</h2>
+            <div class="grid sm:grid-cols-3 gap-4">
+              ${publicEggs.length === 0 ? '<p class="text-sm text-gray-500 col-span-full bg-white p-6 rounded-2xl text-center">등록된 상시 에그가 없습니다.</p>' : ''}
+              ${publicEggs.map(egg => {
+                const pList = db.eggPets.filter(p => p.eggId === egg.id);
+                return `
+                  <div class="bg-white rounded-3xl p-5 border-2 border-orange-200 shadow flex flex-col justify-between">
+                    <div>
+                      <img src="${egg.image}" class="w-28 h-28 object-contain mx-auto rounded-xl mb-2" />
+                      <h3 class="text-lg font-bold text-center">${egg.name}</h3>
+                      <div class="bg-orange-50 p-3 rounded-xl mt-2 text-xs space-y-1">
+                        ${pList.map(p => `<div class="flex justify-between"><span>• [${p.grade}] ${p.name}</span><span class="font-bold text-orange-600">${p.prob}%</span></div>`).join('')}
+                      </div>
+                    </div>
+                    <button onclick="hatchEgg('${egg.id}')" class="mt-4 w-full py-2.5 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-xl transition">${egg.price} 감귤로 부화하기 🐣</button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </section>
+
+          <section class="space-y-4">
+            <h2 class="text-xl font-bold text-pink-700">🐾 상점 직구 펫</h2>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              ${db.shopPets.length === 0 ? '<p class="text-sm text-gray-500 col-span-full bg-white p-6 rounded-2xl text-center">등록된 상점 펫이 없습니다.</p>' : ''}
+              ${db.shopPets.map(sp => `
+                <div class="bg-white rounded-2xl p-4 border-2 border-pink-200 text-center shadow">
+                  <img src="${sp.image}" class="w-24 h-24 object-contain mx-auto rounded-xl" />
+                  <span class="inline-block mt-1 px-2.5 py-0.5 bg-pink-100 text-pink-700 font-semibold rounded-full text-xs">${sp.grade}</span>
+                  <h4 class="mt-1 font-bold">${sp.name}</h4>
+                  <button onclick="
+                    if (!addCoins(currentUserId, -${sp.price}, '펫 입양: ${sp.name}')) return alert('감귤이 부족해요!');
+                    db.userPets.push({ id: 'up'+Date.now(), userId: currentUserId, name: '${sp.name}', image: '${sp.image}', grade: '${sp.grade}' });
+                    saveDB(); if(typeof confetti==='function') confetti(); alert('${sp.name} 입양 완료!'); render();
+                  " class="mt-2 w-full py-2 bg-pink-500 hover:bg-pink-600 text-white font-bold rounded-xl text-xs">${sp.price} 감귤 입양</button>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+        </div>
+      ` : ''}
+
+      ${currentTab === 'events' ? `
+        <div class="space-y-6">
+          <h2 class="text-xl font-bold text-rose-700">🎪 스페셜 이벤트관</h2>
+          ${db.events.length === 0 ? '<div class="bg-white p-8 rounded-3xl text-center text-gray-500">진행 중인 이벤트가 없습니다.</div>' : ''}
+          ${db.events.map(ev => {
+            const ePets = db.eventPets.filter(p => p.eventId === ev.id);
+            const eEggLinks = db.eventEggs.filter(ee => ee.eventId === ev.id);
+            const eEggs = eEggLinks.map(link => db.eggs.find(eg => eg.id === link.eggId)).filter(Boolean);
+            const bgStyle = ev.bgImage
+              ? `background-image: linear-gradient(rgba(255,255,255,0.82), rgba(255,255,255,0.88)), url('${ev.bgImage}'); background-size: cover; background-position: center;`
+              : `background-color: ${ev.bgColor || '#fff1f2'};`;
+
+            return `
+              <div class="rounded-3xl p-6 border-2 border-rose-300 shadow-lg space-y-5" style="${bgStyle}">
+                <div class="flex flex-wrap justify-between items-start gap-2 border-b border-rose-200/80 pb-3">
+                  <div>
+                    <span class="inline-block px-3 py-1 rounded-full bg-rose-500 text-white text-xs font-bold mb-1.5">📅 기간: ${ev.period || '상시 진행'}</span>
+                    <h3 class="text-2xl font-extrabold text-gray-900">🎪 ${ev.title}</h3>
+                    ${ev.banner ? `<p class="text-sm text-gray-700 mt-1 font-medium">${ev.banner}</p>` : ''}
+                  </div>
+                </div>
+
+                ${eEggs.length > 0 ? `
+                  <div>
+                    <h4 class="text-sm font-bold text-orange-800 mb-3">🥚 이벤트 기념 에그</h4>
+                    <div class="grid sm:grid-cols-3 gap-4">
+                      ${eEggs.map(egg => {
+                        const pList = db.eggPets.filter(p => p.eggId === egg.id);
+                        return `
+                          <div class="bg-white/95 rounded-2xl p-4 border-2 border-orange-300 shadow flex flex-col justify-between">
+                            <div>
+                              <img src="${egg.image}" class="w-24 h-24 object-contain mx-auto rounded-xl mb-2" />
+                              <h5 class="font-bold text-center">${egg.name}</h5>
+                              <div class="bg-orange-50 p-2 rounded-xl mt-2 text-xs space-y-1">
+                                ${pList.map(p => `<div class="flex justify-between"><span>• [${p.grade}] ${p.name}</span><span class="font-bold text-orange-600">${p.prob}%</span></div>`).join('')}
+                              </div>
+                            </div>
+                            <button onclick="hatchEgg('${egg.id}')" class="mt-3 w-full py-2 bg-orange-500 text-white font-bold rounded-xl text-xs">${egg.price} 감귤로 부화하기 🐣</button>
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+
+                ${ePets.length > 0 ? `
+                  <div>
+                    <h4 class="text-sm font-bold text-rose-800 mb-3">🐾 이벤트 기념 한정 펫</h4>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                      ${ePets.map(ep => `
+                        <div class="bg-white/95 rounded-2xl p-4 border border-rose-200 text-center shadow">
+                          <img src="${ep.image}" class="w-24 h-24 object-contain mx-auto rounded-xl" />
+                          <span class="inline-block mt-1 px-2 py-0.5 bg-rose-100 text-rose-700 font-semibold rounded-full text-xs">${ep.grade || '스페셜'}</span>
+                          <h5 class="mt-1 font-bold">${ep.name}</h5>
+                          <button onclick="
+                            if (!addCoins(currentUserId, -${ep.price}, '이벤트 펫: ${ep.name}')) return alert('감귤이 부족해요!');
+                            db.userPets.push({ id: 'up'+Date.now(), userId: currentUserId, name: '${ep.name}', image: '${ep.image}', grade: '${ep.grade || '스페셜'}' });
+                            saveDB(); if(typeof confetti==='function') confetti(); alert('입양 완료!'); render();
+                          " class="mt-2 w-full py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-xl text-xs">${ep.price} 감귤 입양</button>
+                        </div>
+                      `).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+
+                ${eEggs.length === 0 && ePets.length === 0 ? `<p class="text-xs text-gray-500">등록된 기념 펫이나 에그가 없습니다.</p>` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      ` : ''}
+
+      ${currentTab === 'dex' ? `
+        <div class="space-y-6">
+          <div class="bg-white rounded-3xl p-6 border-2 border-orange-200 shadow">
+            <h2 class="text-xl font-bold mb-4">📖 내 펫 도감 (${myPets.length}마리)</h2>
+            ${myPets.length === 0 ? '<p class="text-sm text-gray-500">아직 보유한 펫이 없습니다. 상점에서 에그를 부화해보세요!</p>' : ''}
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              ${myPets.map(p => `
+                <div class="bg-orange-50 border border-orange-200 rounded-2xl p-3 text-center">
+                  <img src="${p.image}" class="w-20 h-20 object-contain mx-auto mb-1" />
+                  <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-orange-200 text-orange-800">${p.grade}</span>
+                  <p class="text-sm font-bold mt-1">${p.name}</p>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="bg-white rounded-3xl p-6 border-2 border-green-200 shadow">
+            <h2 class="text-xl font-bold mb-4">🏅 뱃지 도감 (획득: 초록색 / 미획득: 회색)</h2>
+            ${db.badges.length === 0 ? '<p class="text-sm text-gray-500">등록된 뱃지가 없습니다.</p>' : ''}
+            <div class="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              ${db.badges.map(b => {
+                const owned = myBadgeIds.includes(b.id);
+                return `
+                  <div class="rounded-2xl p-4 text-center border-2 flex flex-col justify-between ${owned ? 'bg-green-50 border-green-500 text-green-900' : 'bg-gray-100 border-gray-300 text-gray-500 grayscale opacity-75'}">
+                    <div>
+                      <img src="${b.image}" class="w-16 h-16 object-cover mx-auto rounded-full mb-2 border" />
+                      <p class="text-base font-bold">${b.name}</p>
+                      <p class="text-xs mt-1 bg-white/80 rounded-lg p-1.5 border border-gray-200 text-gray-600">📌 조건: ${b.condition || '조건 없음'}</p>
+                    </div>
+                    <span class="inline-block mt-3 text-xs font-bold">${owned ? '✔ 획득 완료' : '🔒 미획득'}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      ${currentTab === 'rank' ? `
+        <div class="grid md:grid-cols-3 gap-6">
+          <div class="bg-white rounded-3xl p-5 border-2 border-orange-200 shadow">
+            <h3 class="text-lg font-bold text-orange-600 mb-3">🍊 감귤 코인 랭킹</h3>
+            <div class="space-y-2 text-sm">
+              ${[...db.users].sort((a,b)=>b.coins-a.coins).map((u,i)=>`<div class="flex justify-between p-2.5 bg-orange-50 rounded-xl"><span><strong class="font-bold">${i+1}위.</strong> ${u.nickname||u.code}</span><span class="font-bold text-orange-700">${u.coins.toLocaleString()} 감귤</span></div>`).join('')}
+            </div>
+          </div>
+          <div class="bg-white rounded-3xl p-5 border-2 border-green-200 shadow">
+            <h3 class="text-lg font-bold text-green-600 mb-3">🐾 펫 보유 개수 랭킹</h3>
+            <div class="space-y-2 text-sm">
+              ${[...db.users].map(u=>({...u, cnt: db.userPets.filter(p=>p.userId===u.id).length})).sort((a,b)=>b.cnt-a.cnt).map((u,i)=>`<div class="flex justify-between p-2.5 bg-green-50 rounded-xl"><span><strong class="font-bold">${i+1}위.</strong> ${u.nickname||u.code}</span><span class="font-bold text-green-700">${u.cnt}마리</span></div>`).join('')}
+            </div>
+          </div>
+          <div class="bg-white rounded-3xl p-5 border-2 border-purple-200 shadow">
+            <h3 class="text-lg font-bold text-purple-600 mb-3">👑 희귀 이상 등급 랭킹</h3>
+            <div class="space-y-2 text-sm">
+              ${[...db.users].map(u=>({...u, cnt: db.userPets.filter(p=>p.userId===u.id && p.grade!=='일반').length})).sort((a,b)=>b.cnt-a.cnt).map((u,i)=>`<div class="flex justify-between p-2.5 bg-purple-50 rounded-xl"><span><strong class="font-bold">${i+1}위.</strong> ${u.nickname||u.code}</span><span class="font-bold text-purple-700">${u.cnt}마리</span></div>`).join('')}
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      ${currentTab === 'board' ? `
+        <div class="grid md:grid-cols-3 gap-6">
+          <div class="bg-white rounded-3xl p-5 border-2 border-orange-200 shadow space-y-3 h-fit">
+            <h3 class="text-lg font-bold">✍️ 게시판 글쓰기</h3>
+            <input id="pTitle" placeholder="제목" class="w-full px-3 py-2 border rounded-xl text-sm" />
+            <textarea id="pBody" placeholder="내용" rows="3" class="w-full px-3 py-2 border rounded-xl text-sm"></textarea>
+            <div class="flex justify-between items-center text-xs font-medium"><span>상자 배경색:</span><input id="pColor" type="color" value="#ffffff" /></div>
+            <button onclick="
+              const t = document.getElementById('pTitle').value.trim(), c = document.getElementById('pBody').value.trim(), bg = document.getElementById('pColor').value;
+              if(!t||!c) return alert('제목과 내용을 입력해주세요!');
+              db.posts.unshift({ id: 'post'+Date.now(), author: getMe().nickname, title: t, content: c, bg });
+              saveDB(); render();
+            " class="w-full py-2.5 bg-orange-500 text-white font-bold rounded-xl">등록하기</button>
+          </div>
+          <div class="md:col-span-2 space-y-3">
+            ${db.posts.length === 0 ? '<div class="bg-white p-6 rounded-2xl text-center text-sm text-gray-500">아직 작성된 게시글이 없습니다.</div>' : ''}
+            ${db.posts.map(p => `
+              <div class="rounded-2xl p-4 border-2 border-orange-200 shadow" style="background-color: ${p.bg || '#ffffff'}">
+                <div class="flex justify-between items-center mb-1">
+                  <h4 class="text-base font-bold">${p.title}</h4>
+                  <span class="text-xs font-semibold text-gray-500">작성자: ${p.author}</span>
+                </div>
+                <p class="text-sm text-gray-700 whitespace-pre-line">${p.content}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      ${currentTab === 'profile' ? `
+        <div class="max-w-lg mx-auto rounded-3xl p-6 border-2 border-orange-300 shadow space-y-4" style="background-color: ${me.bgColor || '#FFF7ED'}">
+          <h2 class="text-xl font-bold text-orange-700">🎨 내 프로필 & 이름 변경</h2>
+          <div>
+            <label class="text-xs font-semibold text-gray-600">내 이름 (닉네임 변경)</label>
+            <input id="profNick" value="${me.nickname}" class="w-full mt-1 px-3 py-2 border rounded-xl bg-white" />
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-gray-600">상태 메시지 (텍스트 상자)</label>
+            <textarea id="profBio" rows="3" class="w-full mt-1 px-3 py-2 border rounded-xl bg-white">${me.bio || ''}</textarea>
+          </div>
+          <div class="flex items-center justify-between bg-white/80 p-3 rounded-xl">
+            <span class="text-sm font-medium">배경 색상 선택:</span>
+            <input id="profBg" type="color" value="${me.bgColor || '#FFF7ED'}" />
+          </div>
+          <button onclick="updateProfile()" class="w-full py-3 bg-orange-500 text-white font-bold rounded-2xl shadow">이름 & 프로필 저장하기 ✨</button>
+        </div>
+      ` : ''}
+
+      ${currentTab === 'admin' && isAdmin ? `
+        <div class="space-y-6">
+          ${isSuper ? `
+            <div class="bg-white rounded-3xl p-6 border-2 border-amber-400 shadow space-y-4">
+              <div class="flex flex-wrap justify-between items-center gap-2">
+                <h2 class="text-xl font-bold text-amber-700">👑 [대표 전용] 코드 발급 & 회원 관리</h2>
+                <div class="flex gap-2">
+                  <button onclick="createInviteCode('member')" class="px-3.5 py-2 bg-orange-500 text-white font-semibold rounded-xl text-xs">+ 일반회원 코드</button>
+                  <button onclick="createInviteCode('sub_admin')" class="px-3.5 py-2 bg-amber-600 text-white font-semibold rounded-xl text-xs">+ 부관리자 코드</button>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 bg-amber-50 p-3 rounded-2xl text-sm">
+                <span class="font-semibold">💰 지급/차감할 감귤 수량 입력:</span>
+                <input id="customCoinInput" type="number" placeholder="예: 500" class="w-32 px-3 py-1.5 border rounded-xl bg-white" />
+                <span class="text-xs text-gray-500">(입력 후 아래 표에서 지급/차감 클릭)</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left border-collapse">
+                  <thead>
+                    <tr class="border-b bg-orange-50 font-bold">
+                      <th class="p-2.5">코드</th><th class="p-2.5">닉네임</th><th class="p-2.5">등급</th><th class="p-2.5">감귤</th><th class="p-2.5">관리</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${db.users.map(u => `
+                      <tr class="border-b">
+                        <td class="p-2.5 font-mono font-bold">${u.code}</td>
+                        <td class="p-2.5">${u.nickname || '(미접속)'}</td>
+                        <td class="p-2.5">${u.role}</td>
+                        <td class="p-2.5 font-semibold">${u.coins.toLocaleString()}</td>
+                        <td class="p-2.5 space-x-1">
+                          <button onclick="handleCustomCoin('${u.id}', true)" class="px-2.5 py-1 bg-green-500 text-white rounded text-xs font-semibold">지급</button>
+                          <button onclick="handleCustomCoin('${u.id}', false)" class="px-2.5 py-1 bg-red-500 text-white rounded text-xs font-semibold">차감</button>
+                          ${u.id !== me.id ? `<button onclick="u=db.users.find(x=>x.id==='${u.id}'); u.suspended=!u.suspended; saveDB(); render();" class="px-2.5 py-1 bg-gray-600 text-white rounded text-xs">${u.suspended ? '정지해제' : '정지'}</button>` : ''}
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              <div class="pt-3 border-t flex flex-wrap gap-2">
+                <input id="noticeTitle" placeholder="공지 제목" class="px-3 py-2 border rounded-xl text-sm" />
+                <input id="noticeContent" placeholder="공지 내용" class="flex-1 px-3 py-2 border rounded-xl text-sm" />
+                <button onclick="addNotice()" class="px-4 py-2 bg-amber-500 text-white font-bold rounded-xl text-sm">공지등록</button>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- 🥚 새 에그 & 다중 펫 슬롯 추가 -->
+          <div class="bg-white rounded-3xl p-6 border-2 border-orange-200 shadow space-y-4">
+            <div class="flex flex-wrap justify-between items-center gap-2">
+              <h3 class="text-lg font-bold text-orange-700">🥚 새 에그 & 다중 펫 슬롯 추가</h3>
+              <button type="button" onclick="addEggSlot()" class="px-3 py-1.5 bg-orange-100 text-orange-800 hover:bg-orange-200 font-bold rounded-xl text-xs">+ 펫 슬롯 추가</button>
+            </div>
+
+            <div class="grid sm:grid-cols-3 gap-2.5 bg-orange-50/70 p-4 rounded-2xl border border-orange-200">
+              <input id="eggName" placeholder="에그 이름 (예: 황금 감귤 에그)" class="px-3 py-2 border rounded-xl text-sm bg-white" />
+              <input id="eggImg" placeholder="에그 이미지 URL" class="px-3 py-2 border rounded-xl text-sm bg-white" />
+              <div class="flex items-center gap-2">
+                <input id="eggPrice" type="number" placeholder="부화 가격 (감귤)" class="w-full px-3 py-2 border rounded-xl text-sm bg-white" />
+              </div>
+              <label class="col-span-full flex items-center gap-2 text-xs font-semibold text-orange-900 mt-1">
+                <input id="eggEventOnly" type="checkbox" class="rounded" />
+                <span>이벤트 전용 에그로 설정 (일반 상점에는 숨기고 이벤트관에서만 연결)</span>
+              </label>
+            </div>
+
+            <div class="space-y-2.5">
+              <p class="text-xs font-bold text-gray-600">🐾 에그에서 부화할 펫 목록 (${tempEggPets.length}개 슬롯)</p>
+              ${tempEggPets.map((slot, idx) => `
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-gray-50 p-3 rounded-2xl border">
+                  <div class="sm:col-span-3">
+                    <input id="epName_${idx}" value="${slot.name}" placeholder="펫 이름 #${idx + 1}" class="w-full px-3 py-2 border rounded-xl text-sm bg-white" />
+                  </div>
+                  <div class="sm:col-span-4">
+                    <input id="epImg_${idx}" value="${slot.image}" placeholder="펫 이미지 URL" class="w-full px-3 py-2 border rounded-xl text-sm bg-white" />
+                  </div>
+                  <div class="sm:col-span-2">
+                    <select id="epGrade_${idx}" class="w-full px-2.5 py-2 border rounded-xl text-sm bg-white">
+                      ${['일반', '희귀', '스페셜', '레인보우'].map(g => `<option value="${g}" ${slot.grade === g ? 'selected' : ''}>${g}</option>`).join('')}
+                    </select>
+                  </div>
+                  <div class="sm:col-span-2">
+                    <input id="epProb_${idx}" type="number" value="${slot.prob}" placeholder="확률(%)" class="w-full px-3 py-2 border rounded-xl text-sm bg-white" />
+                  </div>
+                  <div class="sm:col-span-1 text-right">
+                    <button type="button" onclick="removeEggSlot(${idx})" class="px-2.5 py-2 bg-red-100 text-red-600 hover:bg-red-200 rounded-xl text-xs font-bold">삭제</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <button onclick="saveEggWithPets()" class="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white font-bold rounded-2xl text-sm shadow">에그와 모든 펫 슬롯 저장하기 🥚</button>
+          </div>
+
+          <!-- 🎪 이벤트관 생성 -->
+          <div class="bg-white rounded-3xl p-6 border-2 border-rose-200 shadow space-y-4">
+            <div class="flex flex-wrap justify-between items-center gap-2">
+              <h3 class="text-lg font-bold text-rose-700">🎪 새 이벤트 생성 & 꾸미기</h3>
+              <button type="button" onclick="addEventItemSlot()" class="px-3 py-1.5 bg-rose-100 text-rose-800 hover:bg-rose-200 font-bold rounded-xl text-xs">+ 기념 펫/에그 슬롯 추가</button>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3 bg-rose-50/70 p-4 rounded-2xl border border-rose-200">
+              <input id="evTitle" placeholder="이벤트 명 (예: 한여름 감귤 축제 🍊)" class="px-3 py-2 border rounded-xl text-sm bg-white" />
+              <input id="evPeriod" placeholder="이벤트 기간 (예: 2026.11.22 ~ 2026.12.05)" class="px-3 py-2 border rounded-xl text-sm bg-white" />
+              <input id="evBanner" placeholder="이벤트 안내 문구 / 설명" class="sm:col-span-2 px-3 py-2 border rounded-xl text-sm bg-white" />
+              <div class="flex items-center justify-between bg-white px-3 py-2 border rounded-xl text-sm">
+                <span class="text-gray-600 font-medium">이벤트 창 배경색:</span>
+                <input id="evBgColor" type="color" value="#fff1f2" />
+              </div>
+              <input id="evBgImage" placeholder="배경 이미지 URL (입력 시 배경 사진 적용)" class="px-3 py-2 border rounded-xl text-sm bg-white" />
+            </div>
+
+            <div class="space-y-2.5">
+              <p class="text-xs font-bold text-gray-600">🎁 이벤트 기념 펫 / 에그 연결 (${tempEventItems.length}개)</p>
+              ${tempEventItems.map((item, idx) => `
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-gray-50 p-3 rounded-2xl border">
+                  <div class="sm:col-span-2">
+                    <select id="evItemKind_${idx}" onchange="syncEventSlotsFromDOM(); render();" class="w-full px-2.5 py-2 border rounded-xl text-sm bg-white font-semibold">
+                      <option value="pet" ${item.kind === 'pet' ? 'selected' : ''}>🐾 기념 펫</option>
+                      <option value="egg" ${item.kind === 'egg' ? 'selected' : ''}>🥚 기념 에그</option>
+                    </select>
+                  </div>
+                  ${item.kind === 'pet' ? `
+                    <div class="sm:col-span-3">
+                      <input id="evItemName_${idx}" value="${item.name}" placeholder="기념 펫 이름" class="w-full px-3 py-2 border rounded-xl text-sm bg-white" />
+                    </div>
+                    <div class="sm:col-span-3">
+                      <input id="evItemImg_${idx}" value="${item.image}" placeholder="펫 이미지 URL" class="w-full px-3 py-2 border rounded-xl text-sm bg-white" />
+                    </div>
+                    <div class="sm:col-span-2">
+                      <select id="evItemGrade_${idx}" class="w-full px-2.5 py-2 border rounded-xl text-sm bg-white">
+                        ${['스페셜', '희귀', '레인보우', '일반'].map(g => `<option value="${g}" ${item.grade === g ? 'selected' : ''}>${g}</option>`).join('')}
+                      </select>
+                    </div>
+                    <div class="sm:col-span-1">
+                      <input id="evItemPrice_${idx}" type="number" value="${item.price}" placeholder="가격" class="w-full px-2.5 py-2 border rounded-xl text-sm bg-white" />
+                    </div>
+                  ` : `
+                    <div class="sm:col-span-9">
+                      <select id="evItemEggId_${idx}" class="w-full px-3 py-2 border rounded-xl text-sm bg-white">
+                        <option value="">-- 연결할 에그 선택 --</option>
+                        ${db.eggs.map(eg => `<option value="${eg.id}" ${item.eggId === eg.id ? 'selected' : ''}>🥚 ${eg.name} (${eg.price} 감귤)</option>`).join('')}
+                      </select>
+                    </div>
+                  `}
+                  <div class="sm:col-span-1 text-right">
+                    <button type="button" onclick="removeEventItemSlot(${idx})" class="px-2.5 py-2 bg-red-100 text-red-600 hover:bg-red-200 rounded-xl text-xs font-bold">삭제</button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <button onclick="createEvent()" class="w-full py-3 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-2xl text-sm shadow">이벤트관에 등록하기 🎪</button>
+          </div>
+
+          <!-- 🐾 상점 직구 펫 & 🏅 뱃지 생성(조건 포함) -->
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="bg-white rounded-3xl p-6 border-2 border-pink-200 shadow space-y-3 h-fit">
+              <h3 class="text-lg font-bold text-pink-700">🐾 상점 직구 펫 추가</h3>
+              <input id="spName" placeholder="상점 펫 이름" class="w-full px-3 py-2 border rounded-xl text-sm" />
+              <input id="spImg" placeholder="펫 이미지 URL" class="w-full px-3 py-2 border rounded-xl text-sm" />
+              <div class="grid grid-cols-2 gap-2">
+                <select id="spGrade" class="px-3 py-2 border rounded-xl text-sm">
+                  <option value="일반">일반</option><option value="희귀">희귀</option><option value="스페셜">스페셜</option><option value="레인보우">레인보우</option>
+                </select>
+                <input id="spPrice" type="number" placeholder="가격 (감귤)" class="px-3 py-2 border rounded-xl text-sm" />
+              </div>
+              <button onclick="addShopPet()" class="w-full py-2.5 bg-pink-500 text-white font-bold rounded-xl text-sm">상점 펫 등록</button>
+            </div>
+
+            <div class="bg-white rounded-3xl p-6 border-2 border-blue-200 shadow space-y-3 h-fit">
+              <h3 class="text-lg font-bold text-blue-700">🏅 새 뱃지 만들기 (획득 조건 설정)</h3>
+              <input id="badgeName" placeholder="뱃지 이름 (예: 성실한 감귤 수집가)" class="w-full px-3 py-2 border rounded-xl text-sm" />
+              <input id="badgeImg" placeholder="뱃지 이미지 URL" class="w-full px-3 py-2 border rounded-xl text-sm" />
+              <textarea id="badgeCond" rows="2" placeholder="획득 조건 작성 (예: 펫 10마리 이상 보유 및 게시판 글 3회 작성)" class="w-full px-3 py-2 border rounded-xl text-sm"></textarea>
+              <button onclick="addBadge()" class="w-full py-2.5 bg-blue-600 text-white font-bold rounded-xl text-sm">뱃지 만들기</button>
+            </div>
+          </div>
+
+          <!-- 🏅 뱃지 조건 확인 및 회원별 지급/미지급 심사 -->
+          <div class="bg-white rounded-3xl p-6 border-2 border-emerald-300 shadow space-y-4">
+            <h3 class="text-lg font-bold text-emerald-700">🏅 뱃지 조건 확인 & 회원별 지급 / 미지급 관리</h3>
+            ${db.badges.length === 0 ? '<p class="text-sm text-gray-500">생성된 뱃지가 없습니다. 위에서 먼저 뱃지와 조건을 만들어주세요.</p>' : `
+              <div class="space-y-4">
+                ${db.badges.map(b => `
+                  <div class="border-2 border-emerald-100 rounded-2xl p-4 bg-emerald-50/40 space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-200 pb-2.5">
+                      <div class="flex items-center gap-3">
+                        <img src="${b.image}" class="w-12 h-12 rounded-full object-cover border bg-white" />
+                        <div>
+                          <h4 class="font-bold text-base text-gray-900">${b.name}</h4>
+                          <p class="text-xs text-emerald-800 font-medium">📌 조건: ${b.condition || '조건 없음'}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="grid sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      ${db.users.map(u => {
+                        const hasBadge = db.userBadges.some(ub => ub.userId === u.id && ub.badgeId === b.id);
+                        const petCount = db.userPets.filter(p => p.userId === u.id).length;
+                        return `
+                          <div class="flex items-center justify-between bg-white p-2.5 rounded-xl border text-xs">
+                            <div>
+                              <p class="font-bold text-gray-800">${u.nickname || u.code}</p>
+                              <p class="text-[11px] text-gray-500">보유: ${u.coins}감귤 / 펫 ${petCount}마리</p>
+                            </div>
+                            <button onclick="toggleUserBadge('${u.id}', '${b.id}')" class="px-3 py-1.5 rounded-lg font-bold transition ${hasBadge ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">
+                              ${hasBadge ? '✔ 지급됨' : '미지급'}
+                            </button>
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            `}
+          </div>
+
+          <!-- 🗑️ 등록된 항목 관리 -->
+          <div class="bg-white rounded-3xl p-6 border-2 border-gray-200 shadow space-y-3">
+            <h3 class="text-lg font-bold">🗑️ 등록된 항목 관리 / 삭제</h3>
+            <div class="flex flex-wrap gap-2 text-xs font-semibold">
+              ${db.eggs.map(e => `<span class="bg-orange-50 border border-orange-200 px-3 py-1.5 rounded-xl">🥚 ${e.name} <button onclick="db.eggs=db.eggs.filter(x=>x.id!=='${e.id}'); db.eggPets=db.eggPets.filter(x=>x.eggId!=='${e.id}'); saveDB(); render();" class="text-red-600 ml-1">[삭제]</button></span>`).join('')}
+              ${db.shopPets.map(s => `<span class="bg-pink-50 border border-pink-200 px-3 py-1.5 rounded-xl">🐾 ${s.name} <button onclick="db.shopPets=db.shopPets.filter(x=>x.id!=='${s.id}'); saveDB(); render();" class="text-red-600 ml-1">[삭제]</button></span>`).join('')}
+              ${db.badges.map(b => `<span class="bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-xl">🏅 ${b.name} <button onclick="db.badges=db.badges.filter(x=>x.id!=='${b.id}'); db.userBadges=db.userBadges.filter(x=>x.badgeId!=='${b.id}'); saveDB(); render();" class="text-red-600 ml-1">[삭제]</button></span>`).join('')}
+              ${db.events.map(ev => `<span class="bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl">🎪 ${ev.title} <button onclick="db.events=db.events.filter(x=>x.id!=='${ev.id}'); db.eventPets=db.eventPets.filter(x=>x.eventId!=='${ev.id}'); db.eventEggs=db.eventEggs.filter(x=>x.eventId!=='${ev.id}'); saveDB(); render();" class="text-red-600 ml-1">[삭제]</button></span>`).join('')}
+              ${db.notices.map(n => `<span class="bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-xl">📢 ${n.title} <button onclick="db.notices=db.notices.filter(x=>x.id!=='${n.id}'); saveDB(); render();" class="text-red-600 ml-1">[삭제]</button></span>`).join('')}
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      ${modalData ? `
+        <div class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div class="bg-white rounded-3xl p-8 max-w-sm w-full text-center border-4 border-yellow-400 shadow-2xl">
+            <h3 class="text-2xl font-extrabold text-orange-600 mb-3">${modalData.title}</h3>
+            ${modalData.image ? `<img src="${modalData.image}" class="w-32 h-32 object-contain mx-auto mb-3 rounded-2xl" />` : ''}
+            <p class="text-gray-700 font-medium mb-5">${modalData.sub}</p>
+            <button onclick="modalData=null; render();" class="w-full py-3 bg-orange-500 text-white font-bold rounded-2xl">확인</button>
+          </div>
+        </div>
+      ` : ''}
+    </main>
+  `;
+}
+
+render();
+</script>
+</body>
+</html>
